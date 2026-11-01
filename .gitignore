@@ -1,0 +1,18 @@
+# Mac
+.DS_Store
+
+# Xcode
+xcuserdata/
+DerivedData/
+build/
+
+# Secrets
+.env*
+*.p12
+*.cer
+*.pem
+*.key
+*.mobileprovision
+
+# Local learning notes
+.vibe-wise/
