@@ -16,11 +16,23 @@ struct ContentView: View {
 
             VStack {
                 Spacer()
+                if camera.errorMessage == nil {
+                    readButton
+                }
                 readout
             }
         }
         .background(.black)
         .onAppear { camera.start() }
+    }
+
+    private var readButton: some View {
+        Button(camera.isMeasuring ? "Reading…" : "Read") {
+            camera.takeReading()
+        }
+        .font(.title2.bold())
+        .buttonStyle(.borderedProminent)
+        .disabled(camera.isMeasuring)
     }
 
     @ViewBuilder
@@ -38,7 +50,7 @@ struct ContentView: View {
                         .font(.caption.monospaced())
                 }
             } else {
-                Text("Starting camera…")
+                Text("Aim, then press Read")
             }
         }
         .font(.title3.monospaced())

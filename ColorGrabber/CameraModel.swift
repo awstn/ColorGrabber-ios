@@ -15,21 +15,41 @@ struct Reading {
     }
 }
 
-/// Runs the camera and turns the center of each frame into a Reading.
+/// The average color of the sampled square in one frame.
+private struct PixelAverage {
+    let red: Double
+    let green: Double
+    let blue: Double
+}
+
+/// Runs the camera and takes a spot reading from the center of the frame on request.
 final class CameraModel: NSObject, ObservableObject {
     @Published var reading: Reading?
     @Published var errorMessage: String?
+    @Published var isMeasuring = false
 
     let session = AVCaptureSession()
 
     /// Width and height of the sampled square, in camera pixels.
-    /// sample size = crosshair width + crosshair height
+    /// One screen point covers about 2.2 camera pixels, so 60 fills the 30-point crosshair.
     private let sampleSize = 60
-    /// Seconds between readings, so the numbers stay readable (5 per second).
-    private let updateInterval = 0.2
+    /// Seconds of frames averaged into one spot reading, to smooth out frame-to-frame noise.
+    private let measureDuration = 0.5
 
     private let cameraQueue = DispatchQueue(label: "camera")
-    private var lastUpdate = 0.0
+    private var isCollecting = false
+    private var collected: [PixelAverage] = []
+    private var collectionStart = 0.0
+
+    /// Starts a spot reading. The result replaces `reading` once enough frames are collected.
+    func takeReading() {
+        guard !isMeasuring else { return }
+        isMeasuring = true
+        cameraQueue.async {
+            self.collected = []
+            self.isCollecting = true
+        }
+    }
 
     /// Asks for camera permission, then starts the camera.
     func start() {
@@ -84,22 +104,45 @@ final class CameraModel: NSObject, ObservableObject {
 }
 
 extension CameraModel: AVCaptureVideoDataOutputSampleBufferDelegate {
-    /// Called on cameraQueue for every frame.
+    /// Called on cameraQueue for every frame. Frames are ignored unless a reading is in progress.
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
-        let now = sampleBuffer.presentationTimeStamp.seconds
-        guard now - lastUpdate >= updateInterval,
+        guard isCollecting,
               let frame = sampleBuffer.imageBuffer,
-              let reading = centerReading(of: frame) else { return }
+              let average = centerAverage(of: frame) else { return }
 
-        lastUpdate = now
-        DispatchQueue.main.async { self.reading = reading }
+        let now = sampleBuffer.presentationTimeStamp.seconds
+        if collected.isEmpty { collectionStart = now }
+        collected.append(average)
+        guard now - collectionStart >= measureDuration else { return }
+
+        isCollecting = false
+        let primaries = CVBufferCopyAttachment(frame, kCVImageBufferColorPrimariesKey, nil) as? String
+        let reading = makeReading(from: collected, colorPrimaries: primaries ?? "unknown")
+        DispatchQueue.main.async {
+            self.reading = reading
+            self.isMeasuring = false
+        }
+    }
+
+    /// Averages the collected frames into one reading.
+    private func makeReading(from frames: [PixelAverage], colorPrimaries: String) -> Reading {
+        let count = Double(frames.count)
+        let red = frames.reduce(0) { $0 + $1.red } / count
+        let green = frames.reduce(0) { $0 + $1.green } / count
+        let blue = frames.reduce(0) { $0 + $1.blue } / count
+
+        return Reading(red: Int(red.rounded()),
+                       green: Int(green.rounded()),
+                       blue: Int(blue.rounded()),
+                       color: ColorConversion.oklch(red: red, green: green, blue: blue),
+                       colorPrimaries: colorPrimaries)
     }
 
     /// Averages the square of pixels at the center of the frame.
     /// The frame's center is the preview's center at any rotation, so it's always under the crosshair.
-    private func centerReading(of frame: CVPixelBuffer) -> Reading? {
+    private func centerAverage(of frame: CVPixelBuffer) -> PixelAverage? {
         CVPixelBufferLockBaseAddress(frame, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
 
@@ -123,17 +166,9 @@ extension CameraModel: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         }
 
-        let count = sampleSize * sampleSize
-        let red = redTotal / count
-        let green = greenTotal / count
-        let blue = blueTotal / count
-
-        let primaries = CVBufferCopyAttachment(frame, kCVImageBufferColorPrimariesKey, nil) as? String
-
-        return Reading(red: red,
-                       green: green,
-                       blue: blue,
-                       color: ColorConversion.oklch(red: Double(red), green: Double(green), blue: Double(blue)),
-                       colorPrimaries: primaries ?? "unknown")
+        let count = Double(sampleSize * sampleSize)
+        return PixelAverage(red: Double(redTotal) / count,
+                            green: Double(greenTotal) / count,
+                            blue: Double(blueTotal) / count)
     }
 }
