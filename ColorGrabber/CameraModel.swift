@@ -27,6 +27,7 @@ final class CameraModel: NSObject, ObservableObject {
     @Published var reading: Reading?
     @Published var errorMessage: String?
     @Published var isMeasuring = false
+    @Published var zoom: CGFloat = 1
 
     let session = AVCaptureSession()
 
@@ -35,8 +36,11 @@ final class CameraModel: NSObject, ObservableObject {
     private let sampleSize = 60
     /// Seconds of frames averaged into one spot reading, to smooth out frame-to-frame noise.
     private let measureDuration = 0.5
+    /// Highest digital zoom allowed.
+    private let maxZoom: CGFloat = 5
 
     private let cameraQueue = DispatchQueue(label: "camera")
+    private var camera: AVCaptureDevice?
     private var isCollecting = false
     private var collected: [PixelAverage] = []
     private var collectionStart = 0.0
@@ -48,6 +52,18 @@ final class CameraModel: NSObject, ObservableObject {
         cameraQueue.async {
             self.collected = []
             self.isCollecting = true
+        }
+    }
+
+    /// Sets the digital zoom, kept between 1x and the maximum.
+    /// The sampled pixels stay under the crosshair because frames are zoomed the same way as the preview.
+    func setZoom(_ factor: CGFloat) {
+        let limited = min(max(factor, 1), maxZoom)
+        zoom = limited
+        cameraQueue.async {
+            guard let camera = self.camera, (try? camera.lockForConfiguration()) != nil else { return }
+            camera.videoZoomFactor = min(limited, camera.activeFormat.videoMaxZoomFactor)
+            camera.unlockForConfiguration()
         }
     }
 
@@ -91,6 +107,7 @@ final class CameraModel: NSObject, ObservableObject {
         session.addInput(input)
         session.addOutput(output)
         session.commitConfiguration()
+        self.camera = camera
 
         if camera.activeFormat.supportedColorSpaces.contains(.sRGB), (try? camera.lockForConfiguration()) != nil {
             camera.activeColorSpace = .sRGB

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var camera = CameraModel()
+    @State private var zoomAtPinchStart: CGFloat = 1
 
     var body: some View {
         ZStack {
@@ -17,13 +18,29 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 if camera.errorMessage == nil {
+                    Text(String(format: "%.1fx", camera.zoom))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.white)
+                        .shadow(color: .black, radius: 1)
                     readButton
                 }
                 readout
             }
         }
         .background(.black)
+        .contentShape(Rectangle())
+        .gesture(pinchToZoom)
         .onAppear { camera.start() }
+    }
+
+    private var pinchToZoom: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                camera.setZoom(zoomAtPinchStart * value.magnification)
+            }
+            .onEnded { _ in
+                zoomAtPinchStart = camera.zoom
+            }
     }
 
     private var readButton: some View {
